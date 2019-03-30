@@ -1,0 +1,31 @@
+{
+  "name": "ServerPubSub",
+  "version": "1.0.0",
+  "description": "A over the internet multiple client server publish subscribe model",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Joecool48/serverpubsub.git"
+  },
+  "keywords": [
+    "Publish",
+    "Subscribe",
+    "Server",
+    "Client"
+  ],
+  "author": "Joey Bahary",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Joecool48/serverpubsub/issues"
+  },
+  "homepage": "https://github.com/Joecool48/serverpubsub#readme",
+  "dependencies": {
+    "fs": "0.0.1-security",
+    "http": "0.0.0",
+    "websocket": "^1.0.28",
+    "ws": "^6.2.1"
+  }
+}
