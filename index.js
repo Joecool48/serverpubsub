@@ -12,60 +12,58 @@ const WEBSOCKET = 'ws'
 
 var window = {}
 
-function sendMessage(ws, username, key, msg) {
+function sendMessage(username, key, msg) {
     var obj = {}
     obj[USERNAME] = username
     obj[key] = msg
-    ws.send(JSON.stringify(obj))
+    this.send(JSON.stringify(obj))
 }
 
 function sendMessageAllSubs(ws, topic, key, msg) {
-    if (!window.topicMap.has(topic)) throw "Topic does not exist"
-    var users = window.topicMap.get(topic)
+    if (!this._topicMap.has(topic)) throw "Topic does not exist"
+    var users = this.topicMap.get(topic)
     // iterate through all subs and send them the message
     users.foreach(function(user) {        
-        sendMessage(ws, user, key, msg)
+        user[WEBSOCKET].sendMessage(user[USERNAME], key, msg)
     })
 }
 
-function sendError(ws, username, topic, msg) {
+function sendError(username, topic, msg) {
     let o = {}
     o[USERNAME] = username
     o[ERROR] = topic
     o[ERROR_MESSAGE] = msg
-    console.log(wss)
-    ws.send(JSON.stringify(o))
+    this.send(JSON.stringify(o))
 }
 
 function serversubscribe(ws, username, topic) {
-    let obj = {
-            USERNAME: username,
-            WEBSOCKET: ws
-    }
-    if (window.topicMap.has(topic)) {
-        window.topicMap.get(topic).push(obj) // add the user to subscribe set
+    let obj = {}
+    obj[USERNAME] = username
+    obj[WEBSOCKET] = ws
+    if (this._topicMap.has(topic)) {
+        this._topicMap.get(topic).push(obj) // add the user to subscribe set
     } else {
-        window.topicMap.set(topic, [obj]) // if nothing there before create new list
+        this._topicMap.set(topic, [obj]) // if nothing there before create new list
     }
 }
 
 function serverunsubscribe(ws, username, topic) {
-    if (!window.topicMap.has(topic)) {
-        sendError(wss, username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
+    if (!this._topicMap.has(topic)) {
+        ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
     }
-    else if (!window.topicMap.get(topic).has(username)) {
-        sendError(ws, username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
+    else if (!this.topicMap.get(topic).has(username)) {
+        ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
     }
     else {
-        window.topicMap.get(topic).delete(username)
+        this._topicMap.get(topic).delete(username)
     }
 }
 
 
 
 function serverpublish(ws, username, topic, publishTxt) {
-    if (!window.topicMap.has(topic)) {
-        sendError(ws, username, PUBLISH, "Topic " + topic + " does not exist")
+    if (!this._topicMap.has(topic)) {
+        ws.sendError(username, PUBLISH, "Topic " + topic + " does not exist")
         return
     }
     var obj = {}
@@ -81,29 +79,52 @@ function serverpublish(ws, username, topic, publishTxt) {
     else {
         obj[PUBLISH_MESSAGE] = publishTxt
     }
-    var users = window.topicMap.get(topic)
+    var users = this._topicMap.get(topic)
     for (var i = 0; i < users.length; i++) {
-        console.log("YAY: " + users[i][USERNAME])
         obj[USERNAME] = users[i][USERNAME]
-        console.log(users[i])
         users[i][WEBSOCKET].send(JSON.stringify(obj))
     }
 }
 
+function noop(){}
+
+function heartbeat() {
+    this.isAlive = true
+}
+
+function heartbeatStart() {
+    const interval = setInterval(function ping() {
+        wss.clients.forEach(function each(ws) {
+            if (ws.isAlive === false) return ws.terminate()
+            ws.isAlive = false
+            ws.ping(noop) // resend ping
+        })
+    }, 30000)
+}
+
 function createServer(socketIp, listenPort) {
     console.log("Starting server")
-    window["topicMap"] = new Map() 
-    console.log(window.topicMap)
     wss = new WebSocket.Server({
         host: socketIp,
         port: listenPort,
         clientTracking: true
     })
+    
+    var server = {}
+    server["_topicMap"] = new Map()
+    server["_wss"] = wss
+    server._serversubscribe = serversubscribe
+    server._serverunsubscribe = serverunsubscribe
+    server._serverpublish = serverpublish
+
     wss.on('connection', function(ws) {
-        console.log(window)
-        console.log("Got connection")
+        // add functions to ws for convinience
+        ws.sendError = sendError
+        ws.sendMessage = sendMessage
+        // check if connection stays 
+        ws.isAlive = true
+        ws.on('pong', heartbeat)
         ws.on('message', function(data) {
-            console.log(window)
             // try catch to make sure that parsing the object is good
             try {
                 const receiveObject = JSON.parse(data)
@@ -111,13 +132,13 @@ function createServer(socketIp, listenPort) {
                     throw "Could not find username for the server"
                 }
                 if (SUBSCRIBE in receiveObject) {
-                    serversubscribe(ws, receiveObject[USERNAME], receiveObject[SUBSCRIBE])
+                    server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[SUBSCRIBE])
                 }
                 if (UNSUBSCRIBE in receiveObject) {
-                    serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[UNSUBSCRIBE])
+                    server._serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[UNSUBSCRIBE])
                 }
                 if (PUBLISH in receiveObject) {
-                    serverpublish(ws, receiveObject[USERNAME], receiveObject[PUBLISH], receiveObject[PUBLISH_MESSAGE])
+                    server._serverpublish(ws, receiveObject[USERNAME], receiveObject[PUBLISH], receiveObject[PUBLISH_MESSAGE])
                 }
             }
             catch (e) {
@@ -125,7 +146,7 @@ function createServer(socketIp, listenPort) {
             }
         })
     })
-
+    return server
 }
 
 // client side functions
@@ -137,33 +158,38 @@ function connect(username, address, socketPort) {
     obj._callbackMap = new Map()
     obj._errorHandler = undefined
     obj._ws.on('open', function(data) {
-        console.log("Opened connection")
+        // do open stuff here
     })
     obj._ws.on('message', function(data) {
-        var obj = {}
+        var tmp = {}
         try {
-            obj = JSON.parse(data) 
+            tmp = JSON.parse(data) 
         } catch (e) {
             console.err("Malformatted object received")
             throw e
         }
 
-        if (ERROR in obj) {
+        if (ERROR in tmp) {
             // call the error handler if there is one
             if (obj._errorHandler === undefined) {
-                throw obj[ERROR] + ": " + obj[ERROR_MESSAGE] // throw the error message
+                throw tmp[ERROR] + ": " + tmp[ERROR_MESSAGE] // throw the error message
             }
             else {
-                obj._errorHandler(obj[ERROR] + ": " + obj[ERROR_MESSAGE]) // call the error handler
+                obj._errorHandler(tmp[ERROR] + ": " + tmp[ERROR_MESSAGE]) // call the error handler
             }
         }
-        if (PUBLISH in obj) {
-            if (!obj._callbackMap.has(obj[PUBLISH])) throw "Cannot find topic that was subscribed to"
+        if (PUBLISH in tmp) {
+            if (!obj._callbackMap.has(tmp[PUBLISH])) throw "Cannot find topic that was subscribed to"
             else {
-                var func = obj._callbackMap.get(obj[PUBLISH])
+                var func = obj._callbackMap.get(tmp[PUBLISH])
                 var messageObj = {}
                 try {
-                    messageObj = JSON.parse(obj[PUBLISH_MESSAGE])
+                    if (typeof(tmp[PUBLISH_MESSAGE]) === 'object') {
+                        messageObj = JSON.parse(tmp[PUBLISH_MESSAGE])
+                    }
+                    else {
+                        messageObj = tmp[PUBLISH_MESSAGE]
+                    }
                 } catch (e) {
                     throw e
                 }
