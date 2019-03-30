@@ -1,5 +1,6 @@
 var WebSocket = require('ws')
 var http = require('http')
+
 const USERNAME = 'username'
 const ERROR = 'error'
 const SUBSCRIBE = 'subscribe'
@@ -7,59 +8,67 @@ const UNSUBSCRIBE = 'unsubscribe'
 const PUBLISH = 'publish'
 const PUBLISH_MESSAGE = 'publish_message'
 const ERROR_MESSAGE = 'error_message'
+const WEBSOCKET = 'ws'
 
-function sendMessage(username, key, msg) {
+var window = {}
+
+function sendMessage(ws, username, key, msg) {
     var obj = {}
     obj[USERNAME] = username
     obj[key] = msg
-    wss.send(JSON.stringify(obj))
+    ws.send(JSON.stringify(obj))
 }
 
-function sendMessageAllSubs(topic, key, msg) {
-    if (!topicMap.has(topic)) throw "Topic does not exist"
-    var users = topicMap.get(topic)
+function sendMessageAllSubs(ws, topic, key, msg) {
+    if (!window.topicMap.has(topic)) throw "Topic does not exist"
+    var users = window.topicMap.get(topic)
     // iterate through all subs and send them the message
     users.foreach(function(user) {        
-        sendMessage(user, key, msg)
+        sendMessage(ws, user, key, msg)
     })
 }
 
-function sendError(username, topic, msg) {
-    var obj = {}
-    obj[USERNAME] = username
-    obj[ERROR] = topic
-    obj[ERROR_MESSAGE] = msg
-    wss.send(JSON.stringify(obj))
+function sendError(ws, username, topic, msg) {
+    let o = {}
+    o[USERNAME] = username
+    o[ERROR] = topic
+    o[ERROR_MESSAGE] = msg
+    console.log(wss)
+    ws.send(JSON.stringify(o))
 }
 
-function serversubscribe(username, topic) {
-    if (!topicMap.has(topic)) {
-        sendError(username, SUBSCRIBE, "Cant subscribe. Topic does not exist")
+function serversubscribe(ws, username, topic) {
+    let obj = {
+            USERNAME: username,
+            WEBSOCKET: ws
+    }
+    if (window.topicMap.has(topic)) {
+        window.topicMap.get(topic).push(obj) // add the user to subscribe set
     } else {
-        topicMap.get(topic).push(username) // add the user to subscribe set
+        window.topicMap.set(topic, [obj]) // if nothing there before create new list
     }
 }
 
-function serverunsubscribe(username, topic) {
-    if (!topicMap.has(topic)) {
-        sendError(username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
+function serverunsubscribe(ws, username, topic) {
+    if (!window.topicMap.has(topic)) {
+        sendError(wss, username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
     }
-    else if (!topicMap.get(topic).has(username)) {
-        sendError(username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
+    else if (!window.topicMap.get(topic).has(username)) {
+        sendError(ws, username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
     }
     else {
-        topicMap.get(topic).delete(username)
+        window.topicMap.get(topic).delete(username)
     }
 }
 
 
 
-function serverpublish(username, topic, publishTxt) {
-    if (!topicMap.has(topic)) {
-        sendError(username, PUBLISH, "Topic " + topic + " does not exist")
+function serverpublish(ws, username, topic, publishTxt) {
+    if (!window.topicMap.has(topic)) {
+        sendError(ws, username, PUBLISH, "Topic " + topic + " does not exist")
         return
     }
-    var obj
+    var obj = {}
     obj[PUBLISH] = topic
     if (typeof publishTxt === 'object') {
         try {
@@ -72,24 +81,29 @@ function serverpublish(username, topic, publishTxt) {
     else {
         obj[PUBLISH_MESSAGE] = publishTxt
     }
-    topicMap.get(topic).foreach(function(user) {
-        obj[USERNAME] = user
-        wss.send(JSON.stringify(obj))
-    })
+    var users = window.topicMap.get(topic)
+    for (var i = 0; i < users.length; i++) {
+        console.log("YAY: " + users[i][USERNAME])
+        obj[USERNAME] = users[i][USERNAME]
+        console.log(users[i])
+        users[i][WEBSOCKET].send(JSON.stringify(obj))
+    }
 }
 
 function createServer(socketIp, listenPort) {
-    topicMap = new Map() 
-    var server = http.createServer(function(request, response) {
-    })
-    server.listen(listenPort)
+    console.log("Starting server")
+    window["topicMap"] = new Map() 
+    console.log(window.topicMap)
     wss = new WebSocket.Server({
-        server: server
+        host: socketIp,
+        port: listenPort,
+        clientTracking: true
     })
-    wss.on('connection', function(ws, req) {
-        const ip = req.connection.remoteAddress
-        
+    wss.on('connection', function(ws) {
+        console.log(window)
+        console.log("Got connection")
         ws.on('message', function(data) {
+            console.log(window)
             // try catch to make sure that parsing the object is good
             try {
                 const receiveObject = JSON.parse(data)
@@ -97,13 +111,13 @@ function createServer(socketIp, listenPort) {
                     throw "Could not find username for the server"
                 }
                 if (SUBSCRIBE in receiveObject) {
-                    serversubscribe(receiveObject[USERNAME], receiveObject[SUBSCRIBE])
+                    serversubscribe(ws, receiveObject[USERNAME], receiveObject[SUBSCRIBE])
                 }
                 if (UNSUBSCRIBE in receiveObject) {
-                    serverunsubscribe(receiveObject[USERNAME], receiveObject[UNSUBSCRIBE])
+                    serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[UNSUBSCRIBE])
                 }
                 if (PUBLISH in receiveObject) {
-                    serverpublish(receiveObject[USERNAME], receiveObject[PUBLISH], receiveObject[PUBLISH_MESSAGE])
+                    serverpublish(ws, receiveObject[USERNAME], receiveObject[PUBLISH], receiveObject[PUBLISH_MESSAGE])
                 }
             }
             catch (e) {
@@ -118,10 +132,13 @@ function createServer(socketIp, listenPort) {
 
 function connect(username, address, socketPort) {
     let obj = {}
-    obj._ws = new WebSocket("ws://" + address + ":" + socketPort)
+    obj._ws = new WebSocket("ws://" + address + ":" + socketPort) 
     obj._username = username
     obj._callbackMap = new Map()
     obj._errorHandler = undefined
+    obj._ws.on('open', function(data) {
+        console.log("Opened connection")
+    })
     obj._ws.on('message', function(data) {
         var obj = {}
         try {
@@ -134,7 +151,7 @@ function connect(username, address, socketPort) {
         if (ERROR in obj) {
             // call the error handler if there is one
             if (obj._errorHandler === undefined) {
-                throw obj[ERROR] // throw the error message
+                throw obj[ERROR] + ": " + obj[ERROR_MESSAGE] // throw the error message
             }
             else {
                 obj._errorHandler(obj[ERROR] + ": " + obj[ERROR_MESSAGE]) // call the error handler
@@ -163,8 +180,6 @@ function connect(username, address, socketPort) {
 
 // onMessagePublished takes in a message and is called when it receives a message to the topic it subscribed to. 
 function subscribe(topic, onMessagePublished) {
-    console.log(this)
-    while(this._ws.readyState != 1){}
     console.log("Subscribing")
     var obj = {}
     obj[USERNAME] = this._username
@@ -174,7 +189,6 @@ function subscribe(topic, onMessagePublished) {
 }
 
 function unsubscribe(topic) {
-    while(this._ws != 1) {}
     console.log("Unsubscribing")
     var obj = {}
     obj[USERNAME] = this._username
@@ -186,7 +200,6 @@ function unsubscribe(topic) {
 }
 
 function publish(topic, message) {
-    while(this._ws != 1) {}
     console.log("Publishing")
     var obj = {}
     obj[USERNAME] = this._username
