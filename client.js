@@ -10,6 +10,7 @@ async function execute() {
 
     usr.subscribe("My Topic", function(msg) {console.log(msg)})
     usr2.publish("My Topic", "Hello joey!")
+    usr2.getSubCount("My Topic", function(username, topic, count) {console.log(topic + " has " + count + " subs")})
 }
 
 

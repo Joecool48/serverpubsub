@@ -12,6 +12,7 @@ const WEBSOCKET = 'ws'
 const TOPIC = 'topic'
 const REQUEST = 'request'
 const GETSUBCOUNT = 'getsubcount'
+const SUBCOUNT = 'subcount'
 
 function sendMessage(username, key, msg) {
     var obj = {}
@@ -101,6 +102,16 @@ function serverpublish(ws, username, topic, publishTxt) {
     }
 }
 
+function servergetsubcount(ws, username, topic) {
+    let obj = {}
+    obj[USERNAME] = username
+    obj[REQUEST] = GETSUBCOUNT
+    obj[TOPIC] = topic
+    let subcount = this._topicMap.get(topic).length
+    obj[SUBCOUNT] = subcount
+    ws.send(JSON.stringify(obj))
+}
+
 function noop(){}
 
 function heartbeat() {
@@ -139,7 +150,7 @@ function createServer(socketIp, listenPort) {
     server._serversubscribe = serversubscribe
     server._serverunsubscribe = serverunsubscribe
     server._serverpublish = serverpublish
-    
+    server._servergetsubcount = servergetsubcount
     wss.on('connection', function(ws) {
         // add functions to ws for convinience
         ws.sendError = sendError
@@ -158,15 +169,21 @@ function createServer(socketIp, listenPort) {
                 if (!(USERNAME in  receiveObject)) {
                     throw "Could not find username for the server"
                 }
-                if (SUBSCRIBE === receiveObject[REQUEST]) {
-                    server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
-                }
-                if (UNSUBSCRIBE === receiveObject[REQUEST]) {
-                    server._serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
-                }
-                if (PUBLISH === receiveObject[REQUEST]) {
-                    server._serverpublish(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[PUBLISH_MESSAGE])
-                }
+                switch (receiveObject[REQUEST]) {
+                    case SUBSCRIBE:
+                        server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
+                        break
+                    case UNSUBSCRIBE:
+                        server._serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
+                        break
+                    case PUBLISH:
+                        server._serverpublish(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[PUBLISH_MESSAGE])
+                        break
+                    case GETSUBCOUNT:
+                        console.log(receiveObject)
+                        server._servergetsubcount(ws, receiveObject[USERNAME], receiveObject[TOPIC])
+                        break
+                    }
             }
             catch (e) {
                 throw e // throw or ignore the request cause object was invalid
@@ -193,6 +210,7 @@ function connect(username, address, socketPort) {
     obj._ws = new WebSocket("ws://" + address + ":" + socketPort) 
     obj._username = username
     obj._callbackMap = new Map()
+    obj._subcountCallback = undefined
     obj._errorHandler = undefined
     obj._ws.on('open', function(data) {
         // do open stuff here
@@ -234,27 +252,32 @@ function connect(username, address, socketPort) {
             }
         }
         if (GETSUBCOUNT === tmp[REQUEST]) {
-            if (obj._subcountCallback in obj) {
-                obj._subcountCallback(tmp[SUBCOUNT])
-            } else {
-                throw "Could not locate sub count callback"
-            }
+            obj._subcountCallback(tmp[USERNAME], tmp[TOPIC], tmp[SUBCOUNT])
         }
     })
     obj.subscribe = subscribe
     obj.unsubscribe = unsubscribe
     obj.publish = publish
     obj.setErrorHandler = setErrorHandler
-    obj.getSubscriberCount = getSubscriberCount
+    obj.getSubCount = getSubscriberCount
     return obj
 }
 
+
+/**
+ *  getSubscriberCount
+ *      @this - A user object given by connect
+ *      @topic - The topic it should fetch the sub count from
+ *      @onReceiveSubCount - A function with a three arguments: usernam, topic, and subcount of that topic 
+ *      @returns - nothing
+ *
+*/
 function getSubscriberCount(topic, onReceiveSubCount) {
     var obj = {}
     obj[USERNAME] = this._username
     obj[REQUEST] = GETSUBCOUNT
     obj[TOPIC] = topic
-    obj._subcountCallback = onReceiveSubCount
+    this._subcountCallback = onReceiveSubCount
     this._ws.send(JSON.stringify(obj))
 }
 
