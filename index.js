@@ -63,7 +63,7 @@ function serverunsubscribe(ws, username, topic) {
     if (!this._topicMap.has(topic)) {
         ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
     }
-    else if (!this.topicMap.get(topic).has(username)) {
+    else if (!this._topicMap.get(topic).has(username)) {
         ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
     }
     else {
@@ -128,6 +128,8 @@ function heartbeatStart() {
     }, 30000)
 }
 
+
+
 /*
  *  createServer
  *      @this - nothing
@@ -174,7 +176,7 @@ function createServer(socketIp, listenPort) {
                         server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
                         break
                     case UNSUBSCRIBE:
-                        server._serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
+                        server._serverunsubscribe (ws, receiveObject[USERNAME], receiveObject[TOPIC])
                         break
                     case PUBLISH:
                         server._serverpublish(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[PUBLISH_MESSAGE])
@@ -328,7 +330,6 @@ function unsubscribe(topic) {
  *      @returns - nothing
 */
 function publish(topic, message) {
-    console.log("Publishing")
     var obj = {}
     obj[REQUEST] = PUBLISH
     obj[USERNAME] = this._username
@@ -339,7 +340,6 @@ function publish(topic, message) {
         obj[PUBLISH_MESSAGE] = message
     }
     this._ws.send(JSON.stringify(obj))
-    console.log("Finished sending")
 }
 
 
