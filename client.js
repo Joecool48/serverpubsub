@@ -14,9 +14,16 @@ async function execute() {
     usr.unsubscribe("My Topic")
     usr2.publish("My Topic", "Hello joey!")
     usr2.publish("My second topic", {"rand":"obj"})
+    let before = new Date().getTime()
     console.log(await usr2.getTopicList())
     console.log(await usr.getSubCount("My Topic"))
     console.log(await usr.getSubscriptionsList())
+
+    console.log(await usr.getSubscriptionsList())
+    console.log(await usr.getSubscriptionsList())
+    console.log(await usr.getSubscriptionsList())
+    let after = new Date().getTime()
+    console.log("Took " + (after - before) + " time to complete these calls")
     console.log("DONE")
 }
 

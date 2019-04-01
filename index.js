@@ -19,7 +19,9 @@ const TOPICLIST = 'topiclist'
 const SUBCOUNT = 'subcount'
 const REQUEST_ID = 'req_id' // an id to signify a request from client to server. Added to object when need to request info from server or another client
 
-const WAIT_TIME_SIZE = 5
+const SENDALLTOPICSINTREE = 'sendalltree' // a true or false attribute that tells it whether it should recurse down the tree
+
+const WAIT_TIME_SIZE = 1
 const MAX_WAIT_TRIES = 10
 
 function sendMessage(username, key, msg) {
@@ -56,35 +58,25 @@ function removeSub(topic) {
 }
 
 function serversubscribe(ws, username, topic) {
-    let obj = {}
-    obj[USERNAME] = username
-    obj[WEBSOCKET] = ws
     ws.addSub(topic) 
     if (this._topicMap.has(topic)) {
-        this._topicMap.get(topic).push(obj) // add the user to subscribe set
+        this._topicMap.get(topic).set(username, ws) // add the user to subscribe set
     } else {
-        this._topicMap.set(topic, [obj]) // if nothing there before create new list
+        let m = new Map()
+        m.set(username, ws)
+        this._topicMap.set(topic, m) // if nothing there before create new map
     }
 }
 
 function serverunsubscribe(ws, username, topic) {
     let users = this._topicMap.get(topic)
-    for (let i = 0; i < users.length; i++) {
-        if (users[i][USERNAME] === username) {
-            users.splice(i, 1)
-            break
-        }
-    }
+    users.delete(username) // remove user from topic map to map
     ws.removeSub(topic)
 }
 
 
 
 function serverpublish(ws, username, topic, publishTxt) {
-    if (!this._topicMap.has(topic)) {
-        ws.sendError(username, PUBLISH, "Topic " + topic + " does not exist")
-        return
-    }
     var obj = {}
     obj[REQUEST] = PUBLISH
     obj[TOPIC] = topic
@@ -99,10 +91,14 @@ function serverpublish(ws, username, topic, publishTxt) {
     else {
         obj[PUBLISH_MESSAGE] = publishTxt
     }
+    // iterate over all users in the topic
     var users = this._topicMap.get(topic)
-    for (var i = 0; i < users.length; i++) {
-        obj[USERNAME] = users[i][USERNAME]
-        users[i][WEBSOCKET].send(JSON.stringify(obj))
+    let mapIter = users.entries()
+    let res = mapIter.next()
+    while(!res.done) {
+        obj[USERNAME] = res.value[0] // get the key
+        res.value[1].send(JSON.stringify(obj)) // get the websocket and send
+        res = mapIter.next()
     }
 }
 
@@ -111,7 +107,7 @@ function servergetsubcount(ws, username, topic, request_id) {
     obj[USERNAME] = username
     obj[REQUEST] = GETSUBCOUNT
     obj[TOPIC] = topic
-    let subcount = this._topicMap.get(topic).length
+    let subcount = this._topicMap.get(topic).size
     obj[SUBCOUNT] = subcount
     obj[REQUEST_ID] = request_id
     ws.send(JSON.stringify(obj))
@@ -162,7 +158,9 @@ function createServer(socketIp, listenPort) {
     })
     
     var server = {}
-    server._topicMap = new Map()
+    server._topicMap = new Map() // map in a map. Second map is username mapped to other info
+    server._topicInheritMap = new Map() // shows the tree of topics. each topic mapped to a list of topics showing its children
+    server._connectedUsersMap = new Map() // all users connected mapped to their ws
     server._wss = wss
     server._serversubscribe = serversubscribe
     server._serverunsubscribe = serverunsubscribe
@@ -182,9 +180,10 @@ function createServer(socketIp, listenPort) {
             // try catch to make sure that parsing the object is good
             try {
                 const receiveObject = JSON.parse(data)
-                if (!(USERNAME in  receiveObject)) {
+                if (!(USERNAME in receiveObject)) {
                     throw "Could not find username for the server"
                 }
+                server._connectedUsersMap.set(receiveObject[USERNAME], ws)
                 switch (receiveObject[REQUEST]) {
                     case SUBSCRIBE:
                         server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
