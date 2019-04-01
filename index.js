@@ -12,6 +12,10 @@ const WEBSOCKET = 'ws'
 const TOPIC = 'topic'
 const REQUEST = 'request'
 const GETSUBCOUNT = 'getsubcount'
+const GETTOPICLIST = 'gettopiclist'
+const GETSUBSCRIPTIONSLIST = 'getsublist'
+const SUBSCRIPTIONLIST = 'sublist'
+const TOPICLIST = 'topiclist'
 const SUBCOUNT = 'subcount'
 const REQUEST_ID = 'req_id' // an id to signify a request from client to server. Added to object when need to request info from server or another client
 
@@ -64,16 +68,14 @@ function serversubscribe(ws, username, topic) {
 }
 
 function serverunsubscribe(ws, username, topic) {
-    if (!this._topicMap.has(topic)) {
-        ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
+    let users = this._topicMap.get(topic)
+    for (let i = 0; i < users.length; i++) {
+        if (users[i][USERNAME] === username) {
+            users.splice(i, 1)
+            break
+        }
     }
-    else if (!this._topicMap.get(topic).has(username)) {
-        ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
-    }
-    else {
-        this._topicMap.get(topic).delete(username)
-        ws.removeSub(topic)
-    }
+    ws.removeSub(topic)
 }
 
 
@@ -86,7 +88,6 @@ function serverpublish(ws, username, topic, publishTxt) {
     var obj = {}
     obj[REQUEST] = PUBLISH
     obj[TOPIC] = topic
-    console.log(publishTxt)
     if (typeof publishTxt === 'object') {
         try {
             obj[PUBLISH_MESSAGE] = JSON.stringify(publishTxt)
@@ -100,7 +101,6 @@ function serverpublish(ws, username, topic, publishTxt) {
     }
     var users = this._topicMap.get(topic)
     for (var i = 0; i < users.length; i++) {
-        console.log("send to: " + users[i][USERNAME])
         obj[USERNAME] = users[i][USERNAME]
         users[i][WEBSOCKET].send(JSON.stringify(obj))
     }
@@ -117,20 +117,33 @@ function servergetsubcount(ws, username, topic, request_id) {
     ws.send(JSON.stringify(obj))
 }
 
-function noop(){}
-
-function heartbeat() {
-    this.isAlive = true
+function getKeys(map) {
+    let keys = new Array(map.size)
+    let i = 0
+    let mapIter = map.keys()
+    while(i < map.size) {
+        keys[i] = mapIter.next().value
+        i += 1
+    }
+    return keys
 }
 
-function heartbeatStart() {
-    const interval = setInterval(function ping() {
-        wss.clients.forEach(function each(ws) {
-            if (ws.isAlive === false) return ws.terminate()
-            ws.isAlive = false
-            ws.ping(noop) // resend ping
-        })
-    }, 30000)
+function servergettopiclist(ws, receiveObj) {
+    let obj = {}
+    obj[USERNAME] = receiveObj[USERNAME]
+    obj[REQUEST] = GETTOPICLIST
+    obj[REQUEST_ID] = receiveObj[REQUEST_ID]
+    obj[TOPICLIST] = getKeys(this._topicMap)
+    ws.send(JSON.stringify(obj))
+}
+
+function servergetsubscriptionlist(ws, receiveObj) {
+    let obj = {}
+    obj[USERNAME] = receiveObj[USERNAME]
+    obj[REQUEST] = GETSUBSCRIPTIONSLIST
+    obj[REQUEST_ID] = receiveObj[REQUEST_ID]
+    obj[SUBSCRIPTIONLIST] = getKeys(ws.subscriptions) // get all the subs for this user
+    ws.send(JSON.stringify(obj))
 }
 
 /*
@@ -142,7 +155,6 @@ function heartbeatStart() {
  *
 */
 function createServer(socketIp, listenPort) {
-    console.log("Starting server")
     wss = new WebSocket.Server({
         host: socketIp,
         port: listenPort,
@@ -150,12 +162,14 @@ function createServer(socketIp, listenPort) {
     })
     
     var server = {}
-    server["_topicMap"] = new Map()
-    server["_wss"] = wss
+    server._topicMap = new Map()
+    server._wss = wss
     server._serversubscribe = serversubscribe
     server._serverunsubscribe = serverunsubscribe
     server._serverpublish = serverpublish
     server._servergetsubcount = servergetsubcount
+    server._servergettopiclist = servergettopiclist
+    server._servergetsubscriptionlist = servergetsubscriptionlist
     wss.on('connection', function(ws) {
         // add functions to ws for convinience
         ws.sendError = sendError
@@ -163,11 +177,8 @@ function createServer(socketIp, listenPort) {
         ws.addSub = addSub
         ws.removeSub = removeSub
         // check if connection stays 
-        ws.isAlive = true
         ws.subscriptions = new Set() // set of subscription names
-        ws.on('pong', heartbeat)
         ws.on('message', function(data) {
-            console.log("Got: " + data)
             // try catch to make sure that parsing the object is good
             try {
                 const receiveObject = JSON.parse(data)
@@ -187,6 +198,11 @@ function createServer(socketIp, listenPort) {
                     case GETSUBCOUNT:
                         server._servergetsubcount(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[REQUEST_ID])
                         break
+                    case GETTOPICLIST:
+                        server._servergettopiclist(ws, receiveObject)
+                        break
+                    case GETSUBSCRIPTIONSLIST:
+                        server._servergetsubscriptionlist(ws, receiveObject)
                     }
             }
             catch (e) {
@@ -224,10 +240,8 @@ function connect(username, address, socketPort) {
         try {
             tmp = JSON.parse(data) 
         } catch (e) {
-            console.err("Malformatted object received")
             throw e
         }
-        console.log(data)
         if (ERROR === tmp[REQUEST]) {
             // call the error handler if there is one
             if (obj._errorHandler === undefined) {
@@ -265,6 +279,8 @@ function connect(username, address, socketPort) {
     obj.publish = publish
     obj.setErrorHandler = setErrorHandler
     obj.getSubCount = getSubscriberCount
+    obj.getTopicList = getTopicList
+    obj.getSubscriptionsList = getSubscriptionsList
     return obj
 }
 
@@ -274,11 +290,9 @@ function timeout(ms) {
 
 async function block_until_response(requestMap, req_id) {
     let num_tries = 0
-    console.log("Begin block")
     do {
         await new Promise(r => setTimeout(r, WAIT_TIME_SIZE)) // wait for WAIT_TIME_SIZE amount of seconds
         num_tries++
-        console.log("Not done")
         if (num_tries > MAX_WAIT_TRIES) {
             throw "Server request timed out"
         }
@@ -302,12 +316,41 @@ async function getSubscriberCount(topic) {
     
     obj[REQUEST_ID] = obj_hash
     this._ws.send(JSON.stringify(obj))
-    console.log("just sent")
     await block_until_response(this._requestMap, obj_hash) // wait till the client receives the server response
     let ret_val = this._requestMap.get(obj_hash) // get object at the request hash location 
+    this._requestMap.delete(obj_hash) // remove the object to free up space
     return ret_val[SUBCOUNT]
 }
 
+async function getTopicList() {
+    var obj = {}
+    obj[USERNAME] = this._username
+    obj[REQUEST] = GETTOPICLIST
+    let obj_hash = hash(obj)
+    
+    obj[REQUEST_ID] = obj_hash
+    this._ws.send(JSON.stringify(obj))
+    await block_until_response(this._requestMap, obj_hash) // wait till client gets server response
+    let ret_val = this._requestMap.get(obj_hash)
+    this._requestMap.delete(obj_hash)
+    return ret_val[TOPICLIST]
+}
+
+async function getSubscriptionsList() {
+    let obj = {}
+    obj[USERNAME] = this._username
+    obj[REQUEST] = GETSUBSCRIPTIONSLIST
+
+    let obj_hash = hash(obj)
+    obj[REQUEST_ID] = obj_hash
+
+    this._ws.send(JSON.stringify(obj))
+    await block_until_response(this._requestMap, obj_hash) // wait till server gets data
+    let ret_val = this._requestMap.get(obj_hash)
+    this._requestMap.delete(obj_hash)
+    return ret_val[SUBSCRIPTIONLIST]
+    
+}
 
 /**
  *  subscribe
@@ -318,7 +361,6 @@ async function getSubscriberCount(topic) {
  *
 */
 function subscribe(topic, onMessagePublished) {
-    console.log("Subscribing")
     var obj = {}
     obj[REQUEST] = SUBSCRIBE
     obj[USERNAME] = this._username
@@ -335,7 +377,6 @@ function subscribe(topic, onMessagePublished) {
  *      @returns - nothing
 */
 function unsubscribe(topic) {
-    console.log("Unsubscribing")
     var obj = {}
     obj[REQUEST] = UNSUBSCRIBE
     obj[USERNAME] = this._username
