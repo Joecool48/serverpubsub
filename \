@@ -1,5 +1,5 @@
 var WebSocket = require('ws')
-var hash = require('object-hash')
+var http = require('http')
 
 const USERNAME = 'username'
 const ERROR = 'error'
@@ -11,12 +11,6 @@ const ERROR_MESSAGE = 'error_message'
 const WEBSOCKET = 'ws'
 const TOPIC = 'topic'
 const REQUEST = 'request'
-const GETSUBCOUNT = 'getsubcount'
-const SUBCOUNT = 'subcount'
-const REQUEST_ID = 'req_id' // an id to signify a request from client to server. Added to object when need to request info from server or another client
-
-const WAIT_TIME_SIZE = 5
-const MAX_WAIT_TRIES = 10
 
 function sendMessage(username, key, msg) {
     var obj = {}
@@ -43,19 +37,10 @@ function sendError(username, topic, msg) {
     this.send(JSON.stringify(o))
 }
 
-function addSub(topic) {
-    this.subscriptions.add(topic)
-}
-
-function removeSub(topic) {
-    this.subscriptions.delete(topic)
-}
-
 function serversubscribe(ws, username, topic) {
     let obj = {}
     obj[USERNAME] = username
     obj[WEBSOCKET] = ws
-    ws.addSub(topic) 
     if (this._topicMap.has(topic)) {
         this._topicMap.get(topic).push(obj) // add the user to subscribe set
     } else {
@@ -67,12 +52,11 @@ function serverunsubscribe(ws, username, topic) {
     if (!this._topicMap.has(topic)) {
         ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. Topic " + topic + " doesnt exist.")
     }
-    else if (!this._topicMap.get(topic).has(username)) {
+    else if (!this.topicMap.get(topic).has(username)) {
         ws.sendError(username, UNSUBSCRIBE, "Cant unsubscribe. User isnt subscribed to " + topic)
     }
     else {
         this._topicMap.get(topic).delete(username)
-        ws.removeSub(topic)
     }
 }
 
@@ -84,9 +68,7 @@ function serverpublish(ws, username, topic, publishTxt) {
         return
     }
     var obj = {}
-    obj[REQUEST] = PUBLISH
     obj[TOPIC] = topic
-    console.log(publishTxt)
     if (typeof publishTxt === 'object') {
         try {
             obj[PUBLISH_MESSAGE] = JSON.stringify(publishTxt)
@@ -100,21 +82,9 @@ function serverpublish(ws, username, topic, publishTxt) {
     }
     var users = this._topicMap.get(topic)
     for (var i = 0; i < users.length; i++) {
-        console.log("send to: " + users[i][USERNAME])
         obj[USERNAME] = users[i][USERNAME]
         users[i][WEBSOCKET].send(JSON.stringify(obj))
     }
-}
-
-function servergetsubcount(ws, username, topic, request_id) {
-    let obj = {}
-    obj[USERNAME] = username
-    obj[REQUEST] = GETSUBCOUNT
-    obj[TOPIC] = topic
-    let subcount = this._topicMap.get(topic).length
-    obj[SUBCOUNT] = subcount
-    obj[REQUEST_ID] = request_id
-    ws.send(JSON.stringify(obj))
 }
 
 function noop(){}
@@ -133,14 +103,6 @@ function heartbeatStart() {
     }, 30000)
 }
 
-/*
- *  createServer
- *      @this - nothing
- *      @socketIp - IP address you want the server to host the socket on
- *      @listenPort - An active port clients can connect on 
- *      @returns - A server object used to control the server at any point in time
- *
-*/
 function createServer(socketIp, listenPort) {
     console.log("Starting server")
     wss = new WebSocket.Server({
@@ -155,16 +117,13 @@ function createServer(socketIp, listenPort) {
     server._serversubscribe = serversubscribe
     server._serverunsubscribe = serverunsubscribe
     server._serverpublish = serverpublish
-    server._servergetsubcount = servergetsubcount
+
     wss.on('connection', function(ws) {
         // add functions to ws for convinience
         ws.sendError = sendError
         ws.sendMessage = sendMessage
-        ws.addSub = addSub
-        ws.removeSub = removeSub
         // check if connection stays 
         ws.isAlive = true
-        ws.subscriptions = new Set() // set of subscription names
         ws.on('pong', heartbeat)
         ws.on('message', function(data) {
             console.log("Got: " + data)
@@ -174,20 +133,15 @@ function createServer(socketIp, listenPort) {
                 if (!(USERNAME in  receiveObject)) {
                     throw "Could not find username for the server"
                 }
-                switch (receiveObject[REQUEST]) {
-                    case SUBSCRIBE:
-                        server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
-                        break
-                    case UNSUBSCRIBE:
-                        server._serverunsubscribe (ws, receiveObject[USERNAME], receiveObject[TOPIC])
-                        break
-                    case PUBLISH:
-                        server._serverpublish(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[PUBLISH_MESSAGE])
-                        break
-                    case GETSUBCOUNT:
-                        server._servergetsubcount(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[REQUEST_ID])
-                        break
-                    }
+                if (SUBSCRIBE === receiveObject[REQUEST]) {
+                    server._serversubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
+                }
+                if (UNSUBSCRIBE === receiveObject[REQUEST]) {
+                    server._serverunsubscribe(ws, receiveObject[USERNAME], receiveObject[TOPIC])
+                }
+                if (PUBLISH === receiveObject[REQUEST]) {
+                    server._serverpublish(ws, receiveObject[USERNAME], receiveObject[TOPIC], receiveObject[PUBLISH_MESSAGE])
+                }
             }
             catch (e) {
                 throw e // throw or ignore the request cause object was invalid
@@ -199,22 +153,11 @@ function createServer(socketIp, listenPort) {
 
 // client side functions
 
-
-/**
- *  connect
- *      @this - nothing
- *      @username - A unique username that will be used to identify a possibly subscriber or publisher
- *      @address - IP address of the host in standard format ex. "192.168.0.5"
- *      @socketPort - A port number that the server is listening on
- *      @returns - A object used to call the other functions for this user to subscribe, publish, etc
- *
-*/
 function connect(username, address, socketPort) {
     let obj = {}
     obj._ws = new WebSocket("ws://" + address + ":" + socketPort) 
     obj._username = username
     obj._callbackMap = new Map()
-    obj._requestMap = new Map() // maps each request id to the object gotten back
     obj._errorHandler = undefined
     obj._ws.on('open', function(data) {
         // do open stuff here
@@ -227,7 +170,7 @@ function connect(username, address, socketPort) {
             console.err("Malformatted object received")
             throw e
         }
-        console.log(data)
+
         if (ERROR === tmp[REQUEST]) {
             // call the error handler if there is one
             if (obj._errorHandler === undefined) {
@@ -237,7 +180,7 @@ function connect(username, address, socketPort) {
                 obj._errorHandler(tmp[TOPIC] + ": " + tmp[ERROR_MESSAGE]) // call the error handler
             }
         }
-        if (PUBLISH === tmp[REQUEST]) {
+        if (PUBLISH in tmp) {
             if (!obj._callbackMap.has(tmp[TOPIC])) throw "Cannot find topic that was subscribed to"
             else {
                 var func = obj._callbackMap.get(tmp[TOPIC])
@@ -255,68 +198,21 @@ function connect(username, address, socketPort) {
                 func(messageObj)
             }
         }
-        if (REQUEST_ID in tmp) {
-            // map the request id to the object in the map
-            obj._requestMap.set(tmp[REQUEST_ID], tmp)
-        }
     })
     obj.subscribe = subscribe
     obj.unsubscribe = unsubscribe
     obj.publish = publish
     obj.setErrorHandler = setErrorHandler
-    obj.getSubCount = getSubscriberCount
+    obj.getSubscriberCount = getSubscriberCount
     return obj
 }
 
-function timeout(ms) {
-    return new Promise(resolve => setTimeout(noop, ms))
-}
-
-async function block_until_response(requestMap, req_id) {
-    let num_tries = 0
-    console.log("Begin block")
-    do {
-        await new Promise(r => setTimeout(r, WAIT_TIME_SIZE)) // wait for WAIT_TIME_SIZE amount of seconds
-        num_tries++
-        console.log("Not done")
-        if (num_tries > MAX_WAIT_TRIES) {
-            throw "Server request timed out"
-        }
-    } while(!requestMap.has(req_id))
-}
-
-/**
- *  getSubscriberCount
- *      @this - A user object given by connect
- *      @topic - The topic it should fetch the sub count from
- *      @onReceiveSubCount - A function with a three arguments: usernam, topic, and subcount of that topic 
- *      @returns - nothing
- *
-*/
-async function getSubscriberCount(topic) {
+function getSubscriberCount(topic) {
     var obj = {}
     obj[USERNAME] = this._username
-    obj[REQUEST] = GETSUBCOUNT
-    obj[TOPIC] = topic
-    let obj_hash = hash(obj)
-    
-    obj[REQUEST_ID] = obj_hash
-    this._ws.send(JSON.stringify(obj))
-    console.log("just sent")
-    await block_until_response(this._requestMap, obj_hash) // wait till the client receives the server response
-    let ret_val = this._requestMap.get(obj_hash) // get object at the request hash location 
-    return ret_val[SUBCOUNT]
 }
 
-
-/**
- *  subscribe
- *      @this - A user object given by connect
- *      @topic - The topic this user should subscribe to
- *      @onMessagePublished - A callback function that is called anytime anything is published to this topic. The function takes an arg that specifies the message, topic, and user it came from
- *      @returns - nothing
- *
-*/
+// onMessagePublished takes in a message and is called when it receives a message to the topic it subscribed to. 
 function subscribe(topic, onMessagePublished) {
     console.log("Subscribing")
     var obj = {}
@@ -327,13 +223,6 @@ function subscribe(topic, onMessagePublished) {
     this._ws.send(JSON.stringify(obj))
 }
 
-
-/**
- *  unsubscribe
- *      @this - A user object given by connect
- *      @topic - Unsubscribe the current user from this topic
- *      @returns - nothing
-*/
 function unsubscribe(topic) {
     console.log("Unsubscribing")
     var obj = {}
@@ -346,15 +235,8 @@ function unsubscribe(topic) {
     this._ws.send(JSON.stringify(obj))
 }
 
-
-/**
- *  publish
- *      @this - A user object given by connect
- *      @topic - The topic you want to publish to
- *      @message - The message you want to send. Can be either a string or object
- *      @returns - nothing
-*/
 function publish(topic, message) {
+    console.log("Publishing")
     var obj = {}
     obj[REQUEST] = PUBLISH
     obj[USERNAME] = this._username
@@ -365,15 +247,9 @@ function publish(topic, message) {
         obj[PUBLISH_MESSAGE] = message
     }
     this._ws.send(JSON.stringify(obj))
+    console.log("Finished sending")
 }
 
-
-/**
- *  setErrorHandler
- *      @handler - A function with a single argument, err, that is called with a message when an error occurs
- *      @returns - nothing
- *
-*/
 function setErrorHandler(handler) {
     this._errorHandler = handler // when error occurs function will be called with error as parameter
 }

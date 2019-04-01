@@ -10,9 +10,8 @@ async function execute() {
 
     usr.subscribe("My Topic", function(msg) {console.log(msg)})
     usr2.publish("My Topic", "Hello joey!")
-    usr2.getSubCount("My Topic", function(username, topic, count) {console.log(topic + " has " + count + " subs")})
-    usr.unsubscribe("My Topic")
-//    usr2.publish("My Topic", "Shouldnt get this message")
+    console.log(await usr2.getSubCount("My Topic"))
+    console.log("DONE")
 }
 
 
