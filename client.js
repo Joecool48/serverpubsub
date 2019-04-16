@@ -6,7 +6,7 @@ function sleep(ms) {
 async function execute() {
     var usr = ServerPubSub.connect("joey", "127.0.1.1", 8080)
     var usr2 = ServerPubSub.connect("joey2", "127.0.1.1", 8080)
-    await sleep(500);
+    await sleep(10);
 
     usr.subscribe("My Topic", function(msg) {console.log(msg)})
     usr.subscribe("My second topic", function(msg) {console.log(msg)})
@@ -25,6 +25,7 @@ async function execute() {
     let after = new Date().getTime()
     console.log("Took " + (after - before) + " time to complete these calls")
     console.log("DONE")
+    usr.disconnect()
 }
 
 
