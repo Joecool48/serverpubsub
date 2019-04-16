@@ -1,5 +1,5 @@
 # ServerPubSub
-A small library for the publish subscribe model for multiple clients using websockets.
+A over the internet multiple client server publish subscribe model using websockets.
 
 ### Installing
 `npm install ServerPubSub`
