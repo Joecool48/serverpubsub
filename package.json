@@ -1,5 +1,5 @@
 {
-  "name": "ServerPubSub",
+  "name": "serverpubsub",
   "version": "1.0.0",
   "description": "A over the internet multiple client server publish subscribe model using websockets.",
   "main": "index.js",

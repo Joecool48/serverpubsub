@@ -1,13 +1,13 @@
-# ServerPubSub
+# serverpubsub
 A over the internet multiple client server publish subscribe model using websockets.
 
 ### Installing
-`npm install ServerPubSub`
+`npm install serverpubsub`
 
 ### Example
 
 ```javascript
-var serverpubsub = require('ServerPubSub')
+var serverpubsub = require('serverpubsub')
 
 var server = createServer("192.168.0.12", 8080)
 
